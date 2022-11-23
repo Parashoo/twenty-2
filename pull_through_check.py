@@ -6,9 +6,15 @@ import math
 F_y=1000        #fill in or assign from earlier script
 n_f=4        #fill in or assign from earlier script
 M_z=500        #fill in or assign from earlier script
-A_fi=np.array([0.01,0.01,0.02,0.1])          #fill in or assign from earlier script              #Area of each fastener
-r=np.array([0.001,0.002,0.0025,0.003])          #fill in or assign from earlier script              #Radial distance of the center of each fastener to the fastener's c.g.
+r_i=0.005          #fill in or assign from earlier script      #Inner radius of the fasteners (assuming equal sized fasteners!)
 
+#THIS HAS TO BE FILLED IN AS INPUT:
+coords=np.array([[0.05,0.02],[0.05,-0.02],[-0.05,-0.02],[-0.05,0.02]])          #Coordinates of each fastener with origin at center of the lug. Amount of coords changes based on the number of fasteners (obviously)
+
+A_fi=math.pi*r_i**2*np.ones(n_f)             #Inner Area of each fastener (same for all fasteners)
+r=np.zeros(n_f)
+for i in range(n_f):
+    r[i]=((coords[i][0])**2+(coords[i][1])**2)**(1/2)
 F_pi=F_y/n_f
 F_pMz=M_z*A_fi*r/sum(A_fi*r**2)
 
@@ -27,8 +33,9 @@ for i in range(n_f):
 sigma_yield=267    #fill in or assign from earlier script      #Yield stress of fastener material im MPa
 tau_yield=0      #fill in or assign from earlier script      #Shear yield stress of fastener material in MPa (fill in 0 if material property is unknown for that material)
 D_fo=np.array([0.2,0.2,0.3,0.4])       #fill in or assign from earlier script      #Diameter of Fastener Head (in m)
-D_fi=np.array([0.1,0.1,0.2,0.3])       #fill in or assign from earlier script      #Inner diameter of Fastener (in m)
 t_2=0.001                            #Fill in or assign from earlier script         #Thickness of COMBINED plates (So total thickness of the 2 plates on top of eachother) (in m)
+
+D_fi=np.ones(n_f)*r_i*2
 
 sigma_yield=sigma_yield*1000000
 if tau_yield==0:
