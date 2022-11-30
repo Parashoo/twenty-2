@@ -17,15 +17,39 @@ Rules:
     - Protuding head rivets will be used in this anaylsis
 """
 import numpy as np
+# from math import *
 
+# # Credits to Thomas for these 3 functions
+# def phi(delta_a, delta_b):
+#     return delta_a / (delta_a + delta_b)
+
+# def delta_a(t, E_a, D_fo, D_fi):
+#     return 4 * t / (E_a * pi * (D_fo**2 - D_fi**2))
+
+# def delta_b(E_b, L_i, A_i):
+#     sum_factor = 0
+#     for i in range(len(L_i)):
+#         sum_factor += L_i[i] / A_i[i]
+#     return 1 / E_b * sum_factor
+
+#Different input if material changes
+
+# Thermal expansion coefficient for the wall the joint is attached to
+wall_alpha = 22.68e-6
+
+def induced_load_thermal(alpha_c,alpha_b,delta_T,E_b,A_sm,phi):
+    F_delta_T=(alpha_c-alpha_b)*delta_T*E_b*A_sm*(1-phi)
+    return(F_delta_T)
 
 class Fastener():
-    def __init__(self, diameter, outer_diamter, yield_stress, x, y):
+    def __init__(self, diameter, outer_diamter, yield_stress, E, alpha, x, y):
         self.diameter = diameter
         self.outer_diameter = outer_diamter
         self.area = np.pi * diameter**2 / 4
         self.position = np.array([x, y, 0])
         self.yield_stress = yield_stress
+        self.E = E
+        self.alpha = alpha
         
         # Niu page 281
         # If you compare with the table of page 287 for diameter = 1/8 inch
@@ -40,13 +64,14 @@ class Fastener():
         self.max_shear_load = 0.5*self.yield_stress * np.pi*self.diameter**2/4
 
 class Joint():
-    def __init__(self, thickness, sigma_y):
+    def __init__(self, thickness, sigma_y, E, alpha):
         self.fasteners = []
         self.force = np.zeros(3)
         self.moment = np.zeros(3)
         self.thickness = thickness
         self.sigma_y = sigma_y
-        
+        self.E = E
+        self.alpha = alpha
         # Printing is disabled during optimization
         self.printing = True
         
@@ -72,9 +97,11 @@ class Joint():
             self.total_SMOI += distance_centroid**2 * fastener.area
         
     
-    def add_load(self, force, moment):
+    def add_load(self, force, moment, deltaTs_joint, deltaTs_wall):
         self.force = force
         self.moment = moment
+        self.deltaTs_joint = deltaTs_joint
+        self.deltaTs_wall = deltaTs_wall
     
     def calculate_ms(self):
         torque = self.moment[2]
@@ -103,6 +130,23 @@ class Joint():
             total_shear_load = shear_load_torque + shear_load_shear
             shear_magnitude = np.linalg.norm(total_shear_load)
             
+            # Now the thermal check is performed and added on top of the shear
+            # magnitude
+            
+            phi = 0 # Worst case
+            # Checking thermal stress between joint and the wall
+            
+            thermal_additional_loads = np.zeros(4)
+            n = 0
+            for delta_T in deltaTs_joint:
+                thermal_load = (self.alpha-fastener.alpha)*delta_T*fastener.E*fastener.area*(1-phi)
+                thermal_additional_loads[n] = thermal_load
+                n+=1
+            for delta_T in deltaTs_wall:
+                thermal_load = (wall_alpha-fastener.alpha)*delta_T*fastener.E*fastener.area*(1-phi)
+                thermal_additional_loads[n] = thermal_load
+                n+=1
+            shear_magnitude = max(abs(thermal_additional_loads + shear_magnitude))
             # bearing check
             sigma_br = shear_magnitude / (fastener.diameter*self.thickness)
             
@@ -115,7 +159,9 @@ class Joint():
             # Total force
             total_normal_force = normal_force + forcex + forcey
             
+            # Pull trough check with shear stress on the plate
             tau_pull_trough = total_normal_force/(np.pi * fastener.diameter * self.thickness)
+            
             sigma_z_pull_trough = total_normal_force/((np.pi/4) * (fastener.outer_diameter**2-fastener.diameter**2))
             ms_shear_fastener = fastener.max_shear_load/shear_magnitude - 1
             ms_bearing_stress = self.sigma_y/sigma_br - 1
@@ -160,16 +206,38 @@ class Joint():
 """
 Launch case
 """
-sigma_y_bolt = 400e6
+# Material properties bolt
+sigma_y_bolt = 1500e6
+E_bolt = 80e9
+alpha_bolt = 22.68e-6
+
+# Material properties plate
 sigma_y_plate = 400e6
+E_plate = 70e9
+alpha_plate = 22.68e-6
+
 plate_thickness = 0.4e-3
 D = 1e-3
-launch_joint = Joint(plate_thickness, sigma_y_plate)
+launch_joint = Joint(plate_thickness, sigma_y_plate, E_plate, alpha_plate)
 
 
 # force and moment on the joint
 force = np.array([749.9, 0, 749.9])
 moment = np.array([0, 61.4, 0])
+
+assembly_temp=288 # temperature during assembly
+max_temp_joint=500
+min_temp_joint=350
+max_temp_wall=282
+min_temp_wall=225
+
+delta_T_max_joint=max_temp_joint-assembly_temp
+delta_T_min_joint=min_temp_joint-assembly_temp
+delta_T_max_wall=max_temp_wall-assembly_temp
+delta_T_min_wall=min_temp_wall-assembly_temp
+
+deltaTs_joint = [delta_T_min_joint, delta_T_max_joint]
+deltaTs_wall  = [delta_T_min_wall, delta_T_max_wall]
 
 # setting up the coordinates of each bolt
 n = 1
@@ -187,10 +255,10 @@ joint_y = np.array([0, hL])
 # adding all the bolts to the joint
 for x in joint_x:
     for y in joint_y:
-        rivet = Fastener(D, 1.1*D, sigma_y_bolt, x, y)
+        rivet = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, x, y)
         launch_joint.add_fastener(rivet)
 
-launch_joint.add_load(force, moment)
+launch_joint.add_load(force, moment, deltaTs_joint, deltaTs_wall)
 launch_joint.update_centroid()
 launch_joint.optimize(1.5, 1.2, 1e-5, 0.1)
 launch_joint.calculate_ms()
