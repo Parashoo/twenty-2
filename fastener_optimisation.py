@@ -231,8 +231,8 @@ class Joint():
                 print("ms bolt yield criterion                              ", ms_bolt)
                 print("ms plate yield criterion bearing side:               ", ms_plate_bearing)
                 print("ms plate yield criterion no bearing:                 ", ms_plate_no_bearing)
-                print("ms wall yield criterion bearing side:                ", ms_plate_bearing)
-                print("ms wall yield criterion no bearing:                  ", ms_plate_no_bearing)
+                print("ms wall yield criterion bearing side:                ", ms_wall_bearing)
+                print("ms wall yield criterion no bearing:                  ", ms_wall_no_bearing)
                 print("minimum margin of safety:                            ", minimum_ms_fastener)
         return minimum_ms
     def optimize(self, required_safety_factor, diameter_ratio, tolerance, alpha):
