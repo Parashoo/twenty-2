@@ -5,7 +5,6 @@ can be added to the joint at different positions in a normal carthesian coordina
 Aditonally, the force and moment can be added to the joint, and the margins of safety
 can be computed. Also the bolt diameters can be optimized with a specific safety factor 
 in mind.
-
 Rules:
     - A fitting factor of at least 1.15 shall be used (Niu page 274)
     - The efficiency of the joint should be greater than that of the structure (Niu page 275)
@@ -42,12 +41,12 @@ def induced_load_thermal(alpha_c,alpha_b,delta_T,E_b,A_sm,phi):
     return(F_delta_T)
 
 class Fastener():
-    def __init__(self, diameter, outer_diamter, yield_stress, E, alpha, x, y):
+    def __init__(self, diameter, outer_diamter, sigma_y, E, alpha, x, y):
         self.diameter = diameter
         self.outer_diameter = outer_diamter
         self.area = np.pi * diameter**2 / 4
         self.position = np.array([x, y, 0])
-        self.yield_stress = yield_stress
+        self.sigma_y = sigma_y
         self.E = E
         self.alpha = alpha
         
@@ -57,37 +56,40 @@ class Fastener():
         # a conservative estimate (531 lbs they vs 502 lbs formula after
         # conversions
         
-        self.max_shear_load = 0.5*yield_stress * (np.pi*diameter**2)/4
+        self.max_shear_load = 0.5*sigma_y * (np.pi*diameter**2)/4
     
     def update(self):
         self.area = np.pi * self.diameter**2 / 4
-        self.max_shear_load = 0.5*self.yield_stress * np.pi*self.diameter**2/4
+        self.max_shear_load = 0.5*self.sigma_y * np.pi*self.diameter**2/4
 
 class Joint():
-    def __init__(self, thickness, sigma_y, E, alpha):
+    def __init__(self, thickness, wall_thickness, sigma_y, E, alpha):
         self.fasteners = []
         self.force = np.zeros(3)
         self.moment = np.zeros(3)
         self.thickness = thickness
+        self.wall_thickness = wall_thickness
         self.sigma_y = sigma_y
         self.E = E
         self.alpha = alpha
         # Printing is disabled during optimization
         self.printing = True
         
-        
+    # Function to add a fastener
     def add_fastener(self, fastener):
         self.fasteners.append(fastener)
     
+    # Calculate important values for later computation of loading on each bolt
     def update_centroid(self):
-        # sum(A*d**2) needed for torque shear, scalar
+        # sum(A*d**2) needed for shear loading for torque and normal loading due
+        # to Mx and My
         self.total_SMOI = 0
+        
         # sum(A*d) vectorially for centroid determination
         self.total_FMOI = np.zeros(3)
         
         self.total_area = 0
         for fastener in self.fasteners:
-            # sum(A*d)
             self.total_FMOI += fastener.position * fastener.area
             self.total_area += fastener.area
         self.centroid = self.total_FMOI * self.total_area**(-1)
@@ -96,7 +98,7 @@ class Joint():
             distance_centroid = np.linalg.norm(self.centroid - fastener.position)
             self.total_SMOI += distance_centroid**2 * fastener.area
         
-    
+    # Add force vector, moment vector and temperature difference to the joint
     def add_load(self, force, moment, deltaTs_joint, deltaTs_wall):
         self.force = force
         self.moment = moment
@@ -106,7 +108,8 @@ class Joint():
     def calculate_ms(self):
         torque = self.moment[2]
         minimum_ms = 1e99 #some arbitrary high number
-        for n,fastener in enumerate(self.fasteners):
+        for i,fastener in enumerate(self.fasteners):
+            """First calculating all the loads on every bolt"""
             # Calculating the shear load on the fastener due to shear
             shear_load_shear = self.force*(fastener.area/self.total_area)
             shear_load_shear[2] = 0 # only looking at the planar case
@@ -118,24 +121,24 @@ class Joint():
             # Getting the torque shear force direction
             shear_torque_magnitude = torque * fastener.area * r / self.total_SMOI
             shear_torque_direction = np.cross(centroid_distance, np.array([0,0,torque]))
+            
             # Getting the torque shear force magnitutde
             direction_mag = np.linalg.norm(shear_torque_direction)
             if direction_mag != 0:
                 shear_torque_direction /= direction_mag
+            
             # Getting the torque shear force total vector
             shear_load_torque = shear_torque_magnitude*shear_torque_direction
             
             # Getting total shear load by combining both the shear due to shear
             # and the shear due to torque
             total_shear_load = shear_load_torque + shear_load_shear
+            
+            # Only the magnitude is important
             shear_magnitude = np.linalg.norm(total_shear_load)
             
-            # Now the thermal check is performed and added on top of the shear
-            # magnitude
-            
+            # Calculating thermal additional loads
             phi = 0 # Worst case
-            # Checking thermal stress between joint and the wall
-            
             thermal_additional_loads = np.zeros(4)
             n = 0
             for delta_T in deltaTs_joint:
@@ -146,55 +149,114 @@ class Joint():
                 thermal_load = (wall_alpha-fastener.alpha)*delta_T*fastener.E*fastener.area*(1-phi)
                 thermal_additional_loads[n] = thermal_load
                 n+=1
+                
+            # Getting the total shear magnitude by comparing the maximum of each
+            # Combination of the thermal loading
             shear_magnitude = max(abs(thermal_additional_loads + shear_magnitude))
-            # bearing check
-            sigma_br = shear_magnitude / (fastener.diameter*self.thickness)
             
-            # First get the force in and out of the fasteners
+            # Normal force due to external normal force
             normal_force = self.force[2] * fastener.area/self.total_area
-            # Force due to the y moment
+            
+            # Normal Force due to the y moment
             forcex = -self.moment[1] * fastener.area * centroid_distance[0] / self.total_SMOI
-            # Force due to the x moment
+            
+            # Normal Force due to the x moment
             forcey = self.moment[0] * fastener.area * centroid_distance[1] / self.total_SMOI
+            
             # Total force
-            total_normal_force = normal_force + forcex + forcey
+            total_normal_force = abs(normal_force + forcex + forcey)
             
-            # Pull trough check with shear stress on the plate
-            tau_pull_trough = total_normal_force/(np.pi * fastener.diameter * self.thickness)
+            """Now computing the stresses on the bolt..."""
+            total_thickness = self.thickness+self.wall_thickness
             
+            # Bending stress bolt
+            sigma_z_bending_bolt = 16*shear_magnitude*total_thickness/(np.pi*fastener.diameter**3)
+            
+            # Shear stress bolt
+            tau_bolt = shear_magnitude / (fastener.area)
+            
+            # Normal stress bolt
+            sigma_z_bolt = total_normal_force/fastener.area
+            
+            # Total yield criterion bolt
+            yield_criterion_bolt = np.sqrt((sigma_z_bolt + sigma_z_bending_bolt)**2 + 3*tau_bolt**2)
+            
+            """Now computing the stresses on the plate..."""
+            # Bearing stress plate
+            sigma_br_plate = shear_magnitude / (fastener.diameter*self.thickness)
+            
+            # Pull trough shear stress plate
+            tau_pull_trough_plate = total_normal_force/(np.pi * fastener.diameter * self.thickness)
+            
+            # Pull trough normal stress plate and wall
             sigma_z_pull_trough = total_normal_force/((np.pi/4) * (fastener.outer_diameter**2-fastener.diameter**2))
-            ms_shear_fastener = fastener.max_shear_load/shear_magnitude - 1
-            ms_bearing_stress = self.sigma_y/sigma_br - 1
-            ms_shear_stress_plate = (0.5*self.sigma_y)/tau_pull_trough - 1
-            ms_sigma_z_pull_trough = self.sigma_y/sigma_z_pull_trough - 1
-            minimum_ms_fastener = min(ms_sigma_z_pull_trough, ms_shear_fastener, ms_bearing_stress, ms_shear_stress_plate)
+            
+            # Total yield criterion plate on the side without bearing stresses
+            yield_criterion_plate_no_bearing = np.sqrt(sigma_z_pull_trough**2 + 3*tau_pull_trough_plate**2)
+            
+            # Total yield criterion plate on the side with bearing stresses
+            yield_criterion_plate_bearing = np.sqrt(0.5*(sigma_z_pull_trough**2 + (abs(sigma_z_pull_trough)-abs(sigma_br_plate))**2+sigma_br_plate**2) + 3*tau_pull_trough_plate**2)  
+            
+            """Now the stresses on the wall..."""
+            # Bearing stress wall
+            sigma_br_wall = shear_magnitude / (fastener.diameter*self.wall_thickness)
+            
+            # Pull trough shear stress wall
+            tau_pull_trough_wall = total_normal_force/(np.pi * fastener.diameter * self.wall_thickness)
+            
+            # Total yield criterion wall on the side without bearing stresses
+            yield_criterion_wall_no_bearing = np.sqrt(sigma_z_pull_trough**2 + 3*tau_pull_trough_wall**2)
+            
+            # Total yield criterion wall on the side with bearing stresses
+            yield_criterion_wall_bearing = np.sqrt(0.5*(sigma_z_pull_trough**2 + (abs(sigma_z_pull_trough)-abs(sigma_br_wall))**2+sigma_br_wall**2) + 3*tau_pull_trough_wall**2)  
+            
+            # Computing the margins of safety
+            ms_bolt = fastener.sigma_y/yield_criterion_bolt - 1
+            ms_plate_no_bearing = self.sigma_y / yield_criterion_plate_no_bearing - 1
+            ms_plate_bearing = self.sigma_y / yield_criterion_plate_bearing - 1
+            ms_wall_no_bearing = self.sigma_y / yield_criterion_wall_no_bearing - 1
+            ms_wall_bearing = self.sigma_y / yield_criterion_wall_bearing - 1
+            minimum_ms_fastener = min(ms_bolt, ms_plate_no_bearing, ms_plate_bearing, ms_wall_no_bearing, ms_wall_bearing)
+            
+            # Updating the minimum margin of safety if required
             if minimum_ms_fastener < minimum_ms:
                 minimum_ms = minimum_ms_fastener
+                
+            # Print everything out if function is called externally
             if self.printing == True:
                 print("----------------------------------------------------------------------")
-                print("rivet nr:                                           ", n+1)
-                print("bolt diameter [mm]                                  ", fastener.diameter*1000)
+                print("rivet nr:                                            ", i+1)
+                print("rivet diameter [mm]                                  ", fastener.diameter*1000)
                 
-                print("ms shear load / ultimate shear load fastener:       ", ms_shear_fastener)
-                print("ms pull trough load on the plate:                   ", ms_sigma_z_pull_trough)
-                print("ms bearing stress / ultimate bearing stress sheet:  ", ms_bearing_stress)
-                print("ms shear stress sheet / ultimate shear stress sheet:", ms_shear_stress_plate)
-                print("minimum margin of safety:                           ", minimum_ms)
+                print("ms bolt yield criterion                              ", ms_bolt)
+                print("ms plate yield criterion bearing side:               ", ms_plate_bearing)
+                print("ms plate yield criterion no bearing:                 ", ms_plate_no_bearing)
+                print("ms wall yield criterion bearing side:                ", ms_plate_bearing)
+                print("ms wall yield criterion no bearing:                  ", ms_plate_no_bearing)
+                print("minimum margin of safety:                            ", minimum_ms_fastener)
         return minimum_ms
     def optimize(self, required_safety_factor, diameter_ratio, tolerance, alpha):
         print("Optimizing bolt diameter...     ")
         print("Inital diameter:                ", self.fasteners[0].diameter)
+        
+        # Disable printing to prevent console spam
         self.printing=False
         iterations = 1
         for i in range(0,1000):
-            # Its just gradient descent
+            # Its simple gradient descent, where the additional factor is based
+            # of both the ratio of stresses and the safety factor
             factor = self.calculate_ms() + 1 - required_safety_factor
+            
+            # Stop the loop if the factor is within the tolerance
             if -tolerance < factor < tolerance:
                 break
-            for n, fastener in enumerate(self.fasteners):
-                self.fasteners[n].diameter = self.fasteners[n].diameter - alpha*self.fasteners[n].diameter*factor
-                self.fasteners[n].outer_diameter = diameter_ratio*self.fasteners[n].diameter
-                self.fasteners[n].update()
+            
+            # Update every fastener diameter based on the factor
+            for fastener in self.fasteners:
+                fastener.diameter -= alpha*fastener.diameter*factor
+                fastener.outer_diameter = diameter_ratio*fastener.diameter
+                fastener.update()
+            # Update the centroid of the joint
             self.update_centroid()
             iterations += 1
         self.printing=True
@@ -205,20 +267,31 @@ class Joint():
             print("final diameter:              ", self.fasteners[0].diameter)
 """
 Launch case
+
+Material Wall:  Aluminum 6061 T6
+Material Joint: Aluminum 6061 T6
+Material rivet: Aluminum 6061 T6
+
+(All the same due to extreme thermal stresses)
 """
 # Material properties bolt
-sigma_y_bolt = 1500e6
-E_bolt = 80e9
+D = 1e-3
+sigma_y_bolt = 276e6
+E_bolt = 68e9
 alpha_bolt = 22.68e-6
 
 # Material properties plate
-sigma_y_plate = 400e6
-E_plate = 70e9
+plate_thickness = 2e-3
+sigma_y_plate = 276e6
+E_plate = 68e9
 alpha_plate = 22.68e-6
 
-plate_thickness = 0.4e-3
-D = 1e-3
-launch_joint = Joint(plate_thickness, sigma_y_plate, E_plate, alpha_plate)
+# Material properties wall
+wall_thickness = 8e-3
+sigma_y_wall = 276e6
+E_wall = 68e9
+
+launch_joint = Joint(plate_thickness, wall_thickness, sigma_y_plate, E_plate, alpha_plate)
 
 
 # force and moment on the joint
