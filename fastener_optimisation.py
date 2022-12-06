@@ -9,6 +9,7 @@ in mind.
 import numpy as np
 from math import *
 
+# functions for calculating compliance
 def phi(delta_a, delta_b):
     return delta_a / (delta_a + delta_b)
 
@@ -21,13 +22,11 @@ def delta_b(E_b, L_i, A_i):
         sum_factor += L_i[i] / A_i[i]
     return 1 / E_b * sum_factor
 
-# Thermal expansion coefficient for the wall the joint is attached to
-wall_alpha = 22.68e-6
-
 def induced_load_thermal(alpha_c,alpha_b,delta_T,E_b,A_sm,phi):
     F_delta_T=(alpha_c-alpha_b)*delta_T*E_b*A_sm*(1-phi)
     return(F_delta_T)
 
+# Fastener class
 class Fastener():
     def __init__(self, diameter, outer_diamter, sigma_y, E, alpha, x, y):
         self.diameter = diameter
@@ -37,21 +36,14 @@ class Fastener():
         self.sigma_y = sigma_y
         self.E = E
         self.alpha = alpha
-        
-        # Niu page 281
-        # If you compare with the table of page 287 for diameter = 1/8 inch
-        # and yield strength double of the shear strength they give, this is
-        # a conservative estimate (531 lbs they vs 502 lbs formula after
-        # conversions
-        
-        self.max_shear_load = 0.5*sigma_y * (np.pi*diameter**2)/4
     
     def update(self):
         self.area = np.pi * self.diameter**2 / 4
         self.max_shear_load = 0.5*self.sigma_y * np.pi*self.diameter**2/4
 
+# Joint class
 class Joint():
-    def __init__(self, thickness, wall_thickness, sigma_y, E, alpha):
+    def __init__(self, thickness, wall_thickness, sigma_y, E, alpha_joint, alpha_wall):
         self.fasteners = []
         self.force = np.zeros(3)
         self.moment = np.zeros(3)
@@ -59,7 +51,8 @@ class Joint():
         self.wall_thickness = wall_thickness
         self.sigma_y = sigma_y
         self.E = E
-        self.alpha = alpha
+        self.alpha = alpha_joint
+        self.alpha_wall = alpha_wall
         # Printing is disabled during optimization
         self.printing = True
         
@@ -141,7 +134,7 @@ class Joint():
                 thermal_additional_loads[n] = thermal_load
                 n+=1
             for delta_T in deltaTs_wall:
-                thermal_load = (wall_alpha-fastener.alpha)*delta_T*fastener.E*fastener.area*(1-phi)
+                thermal_load = (self.alpha_wall-fastener.alpha)*delta_T*fastener.E*fastener.area*(1-phi)
                 thermal_additional_loads[n] = thermal_load
                 n+=1
                 
@@ -153,7 +146,6 @@ class Joint():
             normal_force = self.force[2] * fastener.area/self.total_area
             
             # Shortening some variables to make reading the equation easier
-            
             Mx = self.moment[0]
             # In the derivation in the book they take M_y opposite of the postive
             # internal direction
@@ -273,11 +265,9 @@ class Joint():
             print("final diameter:              ", self.fasteners[0].diameter)
 """
 Launch case
-
 Material Wall:  Aluminum 6061 T6
 Material Joint: Aluminum 6061 T6
 Material rivet: Aluminum 6061 T6
-
 (All the same due to extreme thermal stresses)
 """
 # Material properties bolt
@@ -296,20 +286,22 @@ alpha_plate = 22.68e-6
 wall_thickness = 8e-3
 sigma_y_wall = 276e6
 E_wall = 68e9
+alpha_wall = 22.68e-6
 
-launch_joint = Joint(plate_thickness, wall_thickness, sigma_y_plate, E_plate, alpha_plate)
-
+launch_joint = Joint(plate_thickness, wall_thickness, sigma_y_plate, E_plate, alpha_plate, alpha_wall)
 
 # force and moment on the joint
 force = np.array([749.9, 0, 749.9])
 moment = np.array([0, 61.4, 0])
 
+# All different temperatures
 assembly_temp=288 # temperature during assembly
 max_temp_joint=500
 min_temp_joint=350
 max_temp_wall=282
 min_temp_wall=225
 
+# All combinations of temperature differences
 delta_T_max_joint=max_temp_joint-assembly_temp
 delta_T_min_joint=min_temp_joint-assembly_temp
 delta_T_max_wall=max_temp_wall-assembly_temp
