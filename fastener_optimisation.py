@@ -318,25 +318,23 @@ delta_T_min_wall=min_temp_wall-assembly_temp
 deltaTs_joint = [delta_T_min_joint, delta_T_max_joint]
 deltaTs_wall  = [delta_T_min_wall, delta_T_max_wall]
 
-# setting up the coordinates of each bolt
-n = 1
-bL = 0.06
-hL = 0.03
-B = 0.2
-local_joint_x = np.array([0, bL])
-local_joint_y = np.array([0, hL])
-joint_x = np.array(local_joint_x)
+# B = horizontal spacing H = vertical spacing
+B = 0.06
+H = 0.03
 
-for i in range(1,n):
-    joint_x = np.append(joint_x, local_joint_x + joint_x[-1] + B)
-joint_y = np.array([0, hL])
+# Setting up the rivets from top to bottom left to right
+rivet1 = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, 0, H)
+rivet2 = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, B, H)
+rivet3 = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, 0, 0)
+rivet4 = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, B, 0)
 
-# adding all the bolts to the joint
-for x in joint_x:
-    for y in joint_y:
-        rivet = Fastener(D, 1.1*D, sigma_y_bolt, E_bolt, alpha_bolt, x, y)
-        launch_joint.add_fastener(rivet)
+# Adding the rivets to the joint
+launch_joint.add_fastener(rivet1)
+launch_joint.add_fastener(rivet2)
+launch_joint.add_fastener(rivet3)
+launch_joint.add_fastener(rivet4)
 
+# Finalzing and optimizing the joint
 launch_joint.add_load(force, moment, deltaTs_joint, deltaTs_wall)
 launch_joint.update_centroid()
 launch_joint.optimize(1.5, 1.2, 1e-5, 0.1)
