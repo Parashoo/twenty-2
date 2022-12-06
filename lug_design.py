@@ -10,8 +10,8 @@ import numpy as np
 forces = [747.9, 2243.74, 7474.9]
 moment = 184
 distance = 0.1
-F_tu = 420e6
-F_ty = 350e6
+F_tu = 310e6
+F_ty = 276e6
 
 F_1 = moment / distance
 P_1 = math.sqrt((forces[1] / 2 + F_1)**2 + (forces[2] / 2)**2)
@@ -62,14 +62,22 @@ def margin_of_safety(D, w, t):
     ms = 1 / (sum_of_ratios(D, w, t)**0.625) - 1
     return ms
 
-D_arr = np.linspace(0.001, 0.021, 10)
-w_arr = np.linspace(0.001, 0.021, 10)
-t_arr = np.linspace(0.001, 0.006, 10)
+volumes = []
+dimensions = []
+
+D_arr = np.linspace(0.001, 0.1, 100)
+w_arr = np.linspace(0.001, 0.1, 100)
+t_arr = np.linspace(0.001, 0.06, 10)
 
 for D in D_arr:
     for w in w_arr:
         if w > D:
             for t in t_arr:
                 ms = margin_of_safety(D, w, t)
-                if 1.5 < ms < 1.6:
-                    print(f"D: {D:.3f}, w: {w:.3f}, t:{t:.3f} -> ms: {ms:.2f}")
+                if 0.5625 < ms < 0.7:
+                    volume = ((w*w/2)+(math.pi*1/4*w*w/2)-(math.pi*D*D/4))*t
+                    volumes.append(volume)
+                    dimensions.append([D,w,t,ms])
+
+config = dimensions[volumes.index(min(volumes))]
+print(f"D: {config[0]:.3f}, w: {config[1]:.3f}, t:{config[2]:.3f} -> ms: {config[3]:.2f}")
