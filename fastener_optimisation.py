@@ -5,33 +5,21 @@ can be added to the joint at different positions in a normal carthesian coordina
 Aditonally, the force and moment can be added to the joint, and the margins of safety
 can be computed. Also the bolt diameters can be optimized with a specific safety factor 
 in mind.
-Rules:
-    - A fitting factor of at least 1.15 shall be used (Niu page 274)
-    - The efficiency of the joint should be greater than that of the structure (Niu page 275)
-    - Fasteners must not have different sizes (Niu page 276)
-    - A safety factor of 1.5 should be used (Niu page 277)
-    - The spacing of fasteners should be at least 4 times their diameter (Niu page 278)
-    - The fasteners should be put at least 2 times their diameter of the edge (Niu page 278)
-    
-    - Protuding head rivets will be used in this anaylsis
 """
 import numpy as np
-# from math import *
+from math import *
 
-# # Credits to Thomas for these 3 functions
-# def phi(delta_a, delta_b):
-#     return delta_a / (delta_a + delta_b)
+def phi(delta_a, delta_b):
+    return delta_a / (delta_a + delta_b)
 
-# def delta_a(t, E_a, D_fo, D_fi):
-#     return 4 * t / (E_a * pi * (D_fo**2 - D_fi**2))
+def delta_a(t, E_a, D_fo, D_fi):
+    return 4 * t / (E_a * pi * (D_fo**2 - D_fi**2))
 
-# def delta_b(E_b, L_i, A_i):
-#     sum_factor = 0
-#     for i in range(len(L_i)):
-#         sum_factor += L_i[i] / A_i[i]
-#     return 1 / E_b * sum_factor
-
-#Different input if material changes
+def delta_b(E_b, L_i, A_i):
+    sum_factor = 0
+    for i in range(len(L_i)):
+        sum_factor += L_i[i] / A_i[i]
+    return 1 / E_b * sum_factor
 
 # Thermal expansion coefficient for the wall the joint is attached to
 wall_alpha = 22.68e-6
@@ -83,7 +71,10 @@ class Joint():
     def update_centroid(self):
         # sum(A*d**2) needed for shear loading for torque and normal loading due
         # to Mx and My
-        self.total_SMOI = 0
+        self.J = 0   # Polar moment of area of the fastener group
+        self.Ixx = 0
+        self.Iyy = 0
+        self.Ixy = 0
         
         # sum(A*d) vectorially for centroid determination
         self.total_FMOI = np.zeros(3)
@@ -95,8 +86,12 @@ class Joint():
         self.centroid = self.total_FMOI * self.total_area**(-1)
         
         for fastener in self.fasteners:
-            distance_centroid = np.linalg.norm(self.centroid - fastener.position)
-            self.total_SMOI += distance_centroid**2 * fastener.area
+            distance_centroid_vector = self.centroid - fastener.position
+            distance_centroid = np.linalg.norm(distance_centroid_vector)
+            self.J += distance_centroid**2 * fastener.area
+            self.Ixx += distance_centroid_vector[1]**2 * fastener.area
+            self.Iyy += distance_centroid_vector[0]**2 * fastener.area
+            self.Ixy += distance_centroid_vector[0] * distance_centroid_vector[1] * fastener.area
         
     # Add force vector, moment vector and temperature difference to the joint
     def add_load(self, force, moment, deltaTs_joint, deltaTs_wall):
@@ -119,7 +114,7 @@ class Joint():
             r = np.linalg.norm(centroid_distance)
             
             # Getting the torque shear force direction
-            shear_torque_magnitude = torque * fastener.area * r / self.total_SMOI
+            shear_torque_magnitude = torque * fastener.area * r / self.J
             shear_torque_direction = np.cross(centroid_distance, np.array([0,0,torque]))
             
             # Getting the torque shear force magnitutde
@@ -157,12 +152,23 @@ class Joint():
             # Normal force due to external normal force
             normal_force = self.force[2] * fastener.area/self.total_area
             
-            # Normal Force due to the y moment
-            forcex = -self.moment[1] * fastener.area * centroid_distance[0] / self.total_SMOI
+            # Shortening some variables to make reading the equation easier
             
-            # Normal Force due to the x moment
-            forcey = self.moment[0] * fastener.area * centroid_distance[1] / self.total_SMOI
+            Mx = self.moment[0]
+            # In the derivation in the book they take M_y opposite of the postive
+            # internal direction
+            My = -self.moment[1] 
+            x = centroid_distance[0]
+            y = centroid_distance[1]
+            Ixx = self.Ixx
+            Iyy = self.Iyy
+            Ixy = self.Ixy
+            denom = Ixx * Iyy - Ixy**2
             
+            # Getting the force components due to assymetrical bending
+            forcey = ((Mx * Iyy - My * Ixy) / denom ) * fastener.area * y
+            forcex = ((My * Ixx - Mx * Ixy) / denom ) * fastener.area * x
+
             # Total force
             total_normal_force = abs(normal_force + forcex + forcey)
             
@@ -231,8 +237,8 @@ class Joint():
                 print("ms bolt yield criterion                              ", ms_bolt)
                 print("ms plate yield criterion bearing side:               ", ms_plate_bearing)
                 print("ms plate yield criterion no bearing:                 ", ms_plate_no_bearing)
-                print("ms wall yield criterion bearing side:                ", ms_wall_bearing)
-                print("ms wall yield criterion no bearing:                  ", ms_wall_no_bearing)
+                print("ms wall yield criterion bearing side:                ", ms_plate_bearing)
+                print("ms wall yield criterion no bearing:                  ", ms_plate_no_bearing)
                 print("minimum margin of safety:                            ", minimum_ms_fastener)
         return minimum_ms
     def optimize(self, required_safety_factor, diameter_ratio, tolerance, alpha):
@@ -314,8 +320,8 @@ deltaTs_wall  = [delta_T_min_wall, delta_T_max_wall]
 
 # setting up the coordinates of each bolt
 n = 1
-bL = 0.1
-hL = 0.1
+bL = 0.06
+hL = 0.03
 B = 0.2
 local_joint_x = np.array([0, bL])
 local_joint_y = np.array([0, hL])
